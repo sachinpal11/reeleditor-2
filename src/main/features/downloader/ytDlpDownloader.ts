@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { app } from 'electron';
 import { DownloadProgress, IDownloader } from '../../../core/ports/IDownloader';
 import { getConfigStore } from '../storage/configStore';
+import { getProcessRegistry } from '../jobs/processRegistry';
 
 export class YtDlpDownloader implements IDownloader {
   private downloadDir: string;
@@ -57,6 +58,7 @@ export class YtDlpDownloader implements IDownloader {
       console.log(`Running: ${ytdlpPath} ${args.join(' ')}`);
 
       const child = spawn(ytdlpPath, args);
+      getProcessRegistry().register(jobId, child);
 
       let lastStderr = '';
 
@@ -87,6 +89,7 @@ export class YtDlpDownloader implements IDownloader {
       });
 
       child.on('close', (code) => {
+        getProcessRegistry().unregister(jobId);
         if (code === 0 && fs.existsSync(outputPath)) {
           resolve(outputPath);
         } else {
@@ -95,6 +98,7 @@ export class YtDlpDownloader implements IDownloader {
       });
 
       child.on('error', (err) => {
+        getProcessRegistry().unregister(jobId);
         reject(new Error(`Failed to start yt-dlp process: ${err.message}`));
       });
     });

@@ -11,37 +11,53 @@ const generateHeadlineSvg = (
   const avgCharWidth = size * 0.52;
   const maxChars = Math.max(5, Math.floor(width / avgCharWidth));
   
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  
   interface WordWithIndex {
     text: string;
     index: number;
   }
-  const wordsWithIndex: WordWithIndex[] = words.map((word, idx) => ({ text: word, index: idx }));
   
   const lines: WordWithIndex[][] = [];
-  let currentLine: WordWithIndex[] = [];
-  let currentLineLength = 0;
-  
-  for (const w of wordsWithIndex) {
-    const wordLen = w.text.length;
-    const spaceLen = currentLine.length > 0 ? 1 : 0;
-    if (currentLineLength + spaceLen + wordLen <= maxChars) {
-      currentLine.push(w);
-      currentLineLength += spaceLen + wordLen;
-    } else {
-      if (currentLine.length > 0) {
-        lines.push(currentLine);
+  if (text.includes('\n')) {
+    const textLines = text.split('\n');
+    let currentWordIndex = 0;
+    for (const lineText of textLines) {
+      const lineWords = lineText.trim().split(/\s+/).filter(Boolean);
+      const line: WordWithIndex[] = [];
+      for (const w of lineWords) {
+        line.push({ text: w, index: currentWordIndex });
+        currentWordIndex++;
       }
-      currentLine = [w];
-      currentLineLength = wordLen;
+      if (line.length > 0) {
+        lines.push(line);
+      }
     }
-  }
-  if (currentLine.length > 0) {
-    lines.push(currentLine);
+  } else {
+    const words = text.trim().split(/\s+/).filter(Boolean);
+    const wordsWithIndex: WordWithIndex[] = words.map((word, idx) => ({ text: word, index: idx }));
+    let currentLine: WordWithIndex[] = [];
+    let currentLineLength = 0;
+    
+    for (const w of wordsWithIndex) {
+      const wordLen = w.text.length;
+      const spaceLen = currentLine.length > 0 ? 1 : 0;
+      if (currentLineLength + spaceLen + wordLen <= maxChars) {
+        currentLine.push(w);
+        currentLineLength += spaceLen + wordLen;
+      } else {
+        if (currentLine.length > 0) {
+          lines.push(currentLine);
+        }
+        currentLine = [w];
+        currentLineLength = wordLen;
+      }
+    }
+    if (currentLine.length > 0) {
+      lines.push(currentLine);
+    }
   }
   
   const lineHeight = size * 1.35;
+  const computedHeight = Math.max(height || 0, Math.round((lines.length - 1) * lineHeight + size * 1.2));
   const escapeXml = (unsafe: string): string =>
     unsafe.replace(/[<>&'"]/g, (c) => {
       switch (c) {
@@ -81,7 +97,7 @@ const generateHeadlineSvg = (
   const startX = align === 'center' ? width / 2 : align === 'right' ? width : 0;
   
   return `
-    <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+    <svg width="${width}" height="${computedHeight}" xmlns="http://www.w3.org/2000/svg">
       <style>
         .headline-text {
           font-family: "${font}", "Inter", "Arial", sans-serif;
@@ -90,7 +106,7 @@ const generateHeadlineSvg = (
           dominant-baseline: hanging;
         }
       </style>
-      <text x="${startX}" y="${size * 0.2}" class="headline-text">
+      <text x="${startX}" y="${size * 0.05}" class="headline-text">
         ${svgLines}
       </text>
     </svg>
@@ -186,15 +202,51 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
   // Measure actual text height dynamically to prevent large vertical stacking gaps
   useEffect(() => {
-    if (headlineRef.current) {
-      // Add 24px of padding to prevent bottom clipping of descenders
-      const actualHeight = Math.round(headlineRef.current.height()) + 24;
-      if (actualHeight > 0 && actualHeight !== template.headline.height) {
-        onChangeElement('headline', { height: actualHeight });
+    const text = template.headline.previewText || 'Your Headline Text Here';
+    const { size, width } = template.headline;
+    const avgCharWidth = size * 0.52;
+    const maxChars = Math.max(5, Math.floor(width / avgCharWidth));
+    
+    const lines: string[][] = [];
+    if (text.includes('\n')) {
+      const textLines = text.split('\n');
+      for (const lineText of textLines) {
+        const lineWords = lineText.trim().split(/\s+/).filter(Boolean);
+        if (lineWords.length > 0) {
+          lines.push(lineWords);
+        }
+      }
+    } else {
+      const words = text.trim().split(/\s+/).filter(Boolean);
+      let currentLine: string[] = [];
+      let currentLineLength = 0;
+      
+      for (const word of words) {
+        const wordLen = word.length;
+        const spaceLen = currentLine.length > 0 ? 1 : 0;
+        if (currentLineLength + spaceLen + wordLen <= maxChars) {
+          currentLine.push(word);
+          currentLineLength += spaceLen + wordLen;
+        } else {
+          if (currentLine.length > 0) {
+            lines.push(currentLine);
+          }
+          currentLine = [word];
+          currentLineLength = wordLen;
+        }
+      }
+      if (currentLine.length > 0) {
+        lines.push(currentLine);
       }
     }
+    
+    const lineHeight = size * 1.35;
+    const actualHeight = Math.round((lines.length - 1) * lineHeight + size * 1.2);
+
+    if (actualHeight > 0 && actualHeight !== template.headline.height) {
+      onChangeElement('headline', { height: actualHeight });
+    }
   }, [
-    template.headline.font,
     template.headline.size,
     template.headline.width,
     template.headline.height,

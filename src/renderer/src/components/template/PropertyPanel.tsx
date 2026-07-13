@@ -1,5 +1,6 @@
 import React from 'react';
 import { Template } from '../../../../shared/types';
+import { useAppStore } from '../../hooks/useAppStore';
 
 interface PropertyPanelProps {
   template: Template;
@@ -16,6 +17,7 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
   onChangeTemplate,
   onSave,
 }) => {
+  const { config } = useAppStore();
   const handleSelectBackground = async (): Promise<void> => {
     const file = await window.api.selectFile([
       { name: 'Images', extensions: ['png', 'jpg', 'jpeg'] },
@@ -337,6 +339,77 @@ export const PropertyPanel: React.FC<PropertyPanelProps> = ({
                 {mode}
               </button>
             ))}
+          </div>
+        </div>
+        {/* AI & Typography Prompt Settings */}
+        <div className="mt-4 pt-4 border-t border-zinc-800 space-y-4">
+          <h5 className="text-xs font-bold uppercase tracking-wider text-indigo-400">AI Prompt & Model Overrides</h5>
+          
+          <div>
+            <label className="text-xs text-zinc-400 block mb-1.5 font-medium">AI Rewrite Engine</label>
+            <select
+              value={template.headline.aiService || ''}
+              onChange={(e): void => {
+                const val = e.target.value || undefined;
+                onChangeElement('headline', { aiService: val, aiModel: undefined });
+              }}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded p-2 text-sm text-white focus:outline-none focus:border-indigo-500 select-none cursor-pointer"
+            >
+              <option value="">Use Global Default</option>
+              <option value="local">Offline Preset Generator (Mock)</option>
+              <option value="gemini">Google Gemini API</option>
+              <option value="openrouter">OpenRouter API</option>
+            </select>
+          </div>
+
+          {(template.headline.aiService === 'gemini' || 
+            (!template.headline.aiService && config?.aiMode === 'gemini')) && (
+            <div>
+              <label className="text-xs text-zinc-400 block mb-1.5 font-medium">Gemini Model Override</label>
+              <select
+                value={template.headline.aiModel || ''}
+                onChange={(e): void => onChangeElement('headline', { aiModel: e.target.value || undefined })}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded p-2 text-sm text-white focus:outline-none focus:border-indigo-500 cursor-pointer"
+              >
+                <option value="">Inherit Global ({config?.geminiModel || 'gemini-1.5-flash'})</option>
+                <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                <option value="gemini-2.0-flash-exp">gemini-2.0-flash-exp</option>
+                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+              </select>
+            </div>
+          )}
+
+          {(template.headline.aiService === 'openrouter' || 
+            (!template.headline.aiService && config?.aiMode === 'openrouter')) && (
+            <div>
+              <label className="text-xs text-zinc-400 block mb-1.5 font-medium">OpenRouter Model Override</label>
+              <input
+                type="text"
+                placeholder={config?.openrouterModel ? `Inherit Global (${config.openrouterModel})` : "e.g. google/gemini-2.5-flash"}
+                value={template.headline.aiModel || ''}
+                onChange={(e): void => onChangeElement('headline', { aiModel: e.target.value || undefined })}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded p-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
+              />
+              <p className="text-[10px] text-zinc-500 mt-1">
+                Enter any valid OpenRouter model identifier (e.g. <code>anthropic/claude-3.5-sonnet</code>). Leave blank to use global settings.
+              </p>
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs text-zinc-400 block mb-1.5 font-medium font-semibold">Custom Headline Prompt Override</label>
+            <textarea
+              rows={6}
+              placeholder="Leave blank to use the default system prompt from headlinePrompt.ts... Paste your custom guidelines here to override it."
+              value={template.headline.customPrompt || ''}
+              onChange={(e): void => onChangeElement('headline', { customPrompt: e.target.value || undefined })}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded p-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono placeholder-zinc-600"
+            />
+            <p className="text-[10px] text-zinc-500 mt-0.5">
+              Customize step instructions, styles, or rules. Use standard JSON schema with <code>headline</code>, <code>lines</code>, and <code>words</code>.
+            </p>
           </div>
         </div>
       </div>

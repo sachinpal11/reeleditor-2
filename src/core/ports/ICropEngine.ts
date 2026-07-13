@@ -6,6 +6,6 @@ export interface CropResult {
 }
 
 export interface ICropEngine {
-  detectActiveVideoArea(videoPath: string): Promise<CropResult>;
-  cropVideo(videoPath: string, crop: CropResult, outputPath: string): Promise<string>;
+  detectActiveVideoArea(videoPath: string, jobId?: string): Promise<CropResult>;
+  cropVideo(videoPath: string, crop: CropResult, outputPath: string, jobId?: string): Promise<string>;
 }

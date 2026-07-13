@@ -6,6 +6,7 @@ import sharp from 'sharp';
 import { IRenderer } from '../../../core/ports/IRenderer';
 import { Template } from '../../../shared/types';
 import { getConfigStore } from '../storage/configStore';
+import { getProcessRegistry } from '../jobs/processRegistry';
 
 export class FfmpegRenderer implements IRenderer {
   private tempDir: string;
@@ -42,6 +43,47 @@ export class FfmpegRenderer implements IRenderer {
     });
   }
 
+  private calculateHeadlineHeight(text: string, size: number, width: number): number {
+    const avgCharWidth = size * 0.52;
+    const maxChars = Math.max(5, Math.floor(width / avgCharWidth));
+    
+    const lines: string[][] = [];
+    if (text.includes('\n')) {
+      const textLines = text.split('\n');
+      for (const lineText of textLines) {
+        const lineWords = lineText.trim().split(/\s+/).filter(Boolean);
+        if (lineWords.length > 0) {
+          lines.push(lineWords);
+        }
+      }
+    } else {
+      const words = text.trim().split(/\s+/).filter(Boolean);
+      let currentLine: string[] = [];
+      let currentLineLength = 0;
+      
+      for (const word of words) {
+        const wordLen = word.length;
+        const spaceLen = currentLine.length > 0 ? 1 : 0;
+        if (currentLineLength + spaceLen + wordLen <= maxChars) {
+          currentLine.push(word);
+          currentLineLength += spaceLen + wordLen;
+        } else {
+          if (currentLine.length > 0) {
+            lines.push(currentLine);
+          }
+          currentLine = [word];
+          currentLineLength = wordLen;
+        }
+      }
+      if (currentLine.length > 0) {
+        lines.push(currentLine);
+      }
+    }
+    
+    const lineHeight = size * 1.35;
+    return Math.round((lines.length - 1) * lineHeight + size * 1.2);
+  }
+
   private async generateHeadlinePng(
     text: string,
     headlineConfig: Template['headline'],
@@ -49,41 +91,56 @@ export class FfmpegRenderer implements IRenderer {
     outputPath: string
   ): Promise<void> {
     const { font, size, color, align, width, height, weight, textStyle, wordStyles = [] } = headlineConfig;
-    // Estimate characters per line based on font size and box width
     const avgCharWidth = size * 0.52;
     const maxChars = Math.max(5, Math.floor(width / avgCharWidth));
-    
-    const words = text.trim().split(/\s+/).filter(Boolean);
     
     interface WordWithIndex {
       text: string;
       index: number;
     }
-    const wordsWithIndex: WordWithIndex[] = words.map((word, idx) => ({ text: word, index: idx }));
     
     const lines: WordWithIndex[][] = [];
-    let currentLine: WordWithIndex[] = [];
-    let currentLineLength = 0;
-    
-    for (const w of wordsWithIndex) {
-      const wordLen = w.text.length;
-      const spaceLen = currentLine.length > 0 ? 1 : 0;
-      if (currentLineLength + spaceLen + wordLen <= maxChars) {
-        currentLine.push(w);
-        currentLineLength += spaceLen + wordLen;
-      } else {
-        if (currentLine.length > 0) {
-          lines.push(currentLine);
+    if (text.includes('\n')) {
+      const textLines = text.split('\n');
+      let currentWordIndex = 0;
+      for (const lineText of textLines) {
+        const lineWords = lineText.trim().split(/\s+/).filter(Boolean);
+        const line: WordWithIndex[] = [];
+        for (const w of lineWords) {
+          line.push({ text: w, index: currentWordIndex });
+          currentWordIndex++;
         }
-        currentLine = [w];
-        currentLineLength = wordLen;
+        if (line.length > 0) {
+          lines.push(line);
+        }
       }
-    }
-    if (currentLine.length > 0) {
-      lines.push(currentLine);
+    } else {
+      const words = text.trim().split(/\s+/).filter(Boolean);
+      const wordsWithIndex: WordWithIndex[] = words.map((word, idx) => ({ text: word, index: idx }));
+      let currentLine: WordWithIndex[] = [];
+      let currentLineLength = 0;
+      
+      for (const w of wordsWithIndex) {
+        const wordLen = w.text.length;
+        const spaceLen = currentLine.length > 0 ? 1 : 0;
+        if (currentLineLength + spaceLen + wordLen <= maxChars) {
+          currentLine.push(w);
+          currentLineLength += spaceLen + wordLen;
+        } else {
+          if (currentLine.length > 0) {
+            lines.push(currentLine);
+          }
+          currentLine = [w];
+          currentLineLength = wordLen;
+        }
+      }
+      if (currentLine.length > 0) {
+        lines.push(currentLine);
+      }
     }
     
     const lineHeight = size * 1.35;
+    const computedHeight = Math.max(height || 0, Math.round((lines.length - 1) * lineHeight + size * 1.2));
 
     const svgLines = lines
       .map((line, idx) => {
@@ -112,7 +169,7 @@ export class FfmpegRenderer implements IRenderer {
     const startX = align === 'center' ? width / 2 : align === 'right' ? width : 0;
     
     const svgText = `
-      <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+      <svg width="${width}" height="${computedHeight}" xmlns="http://www.w3.org/2000/svg">
         <style>
           .headline-text {
             font-family: "${font}", "Inter", "Arial", sans-serif;
@@ -121,7 +178,7 @@ export class FfmpegRenderer implements IRenderer {
             dominant-baseline: hanging;
           }
         </style>
-        <text x="${startX}" y="${size * 0.2}" class="headline-text">
+        <text x="${startX}" y="${size * 0.05}" class="headline-text">
           ${svgLines}
         </text>
       </svg>
@@ -137,7 +194,8 @@ export class FfmpegRenderer implements IRenderer {
     videoPath: string,
     headline: string,
     outputPath: string,
-    onProgress: (progress: number) => void
+    onProgress: (progress: number) => void,
+    jobId?: string
   ): Promise<string> {
     this.cleanTempDir();
 
@@ -147,6 +205,14 @@ export class FfmpegRenderer implements IRenderer {
 
     // Deep copy template to dynamically adjust layout dimensions and positions for the render
     const updatedTemplate = JSON.parse(JSON.stringify(template)) as Template;
+
+    // Calculate and update the actual height for the given headline text
+    const actualHeadlineHeight = this.calculateHeadlineHeight(
+      headline,
+      updatedTemplate.headline.size,
+      updatedTemplate.headline.width
+    );
+    updatedTemplate.headline.height = actualHeadlineHeight;
 
     // Fetch the dimensions of the cropped source video using ffprobe
     const dimensionsCmd = `"${ffprobePath}" -v error -select_streams v:0 -show_entries stream=width,height -of default=noprint_wrappers=1:nokey=1 "${videoPath}"`;
@@ -331,6 +397,10 @@ export class FfmpegRenderer implements IRenderer {
 
     return new Promise((resolve, reject) => {
       const child = spawn(ffmpegPath, args);
+      if (jobId) {
+        getProcessRegistry().register(jobId, child);
+      }
+      
       let lastStderr = '';
 
       child.stderr.on('data', (data) => {
@@ -352,6 +422,9 @@ export class FfmpegRenderer implements IRenderer {
       });
 
       child.on('close', (code) => {
+        if (jobId) {
+          getProcessRegistry().unregister(jobId);
+        }
         this.cleanTempDir();
         if (code === 0 && fs.existsSync(outputPath)) {
           onProgress(100);
@@ -362,6 +435,9 @@ export class FfmpegRenderer implements IRenderer {
       });
 
       child.on('error', (err) => {
+        if (jobId) {
+          getProcessRegistry().unregister(jobId);
+        }
         this.cleanTempDir();
         reject(new Error(`Failed to execute FFmpeg: ${err.message}`));
       });

@@ -7,6 +7,7 @@ import { createWorker } from 'tesseract.js';
 import { IOcrEngine } from '../../../core/ports/IOcrEngine';
 import { CropResult } from '../../../core/ports/ICropEngine';
 import { getConfigStore } from '../storage/configStore';
+import { getProcessRegistry } from '../jobs/processRegistry';
 
 export class TesseractOcrEngine implements IOcrEngine {
   private tempDir: string;
@@ -42,101 +43,129 @@ export class TesseractOcrEngine implements IOcrEngine {
     }
   }
 
-  public async extractText(videoPath: string, activeVideoArea?: CropResult): Promise<string> {
+  public async extractText(videoPath: string, activeVideoArea?: CropResult, jobId?: string): Promise<string> {
     this.cleanTempDir();
 
     const config = getConfigStore().getConfig();
     const ffmpegPath = config.ffmpegPath || 'ffmpeg';
 
-    // 1. Extract a frame from the middle of the video
     const duration = this.getVideoDuration(videoPath);
-    const extractTime = Math.min(duration / 2, 5); // extract at 50% or 5 seconds
+    const timestamps = [
+      Math.min(duration / 2, 5),
+      duration * 0.25,
+      duration * 0.75,
+      duration * 0.15
+    ];
 
-    const extractedFramePath = path.join(this.tempDir, 'ocr_frame.png');
+    let bestText = '';
+    let maxWordsCount = 0;
 
-    await new Promise<void>((resolve, reject) => {
-      const args = [
-        '-y',
-        '-ss', extractTime.toString(),
-        '-i', videoPath,
-        '-vframes', '1',
-        extractedFramePath,
-      ];
-      console.log(`Extracting frame for OCR: ${ffmpegPath} ${args.join(' ')}`);
-      const child = spawn(ffmpegPath, args);
-      child.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`Failed to extract OCR frame. Code: ${code}`));
-      });
-      child.on('error', reject);
-    });
+    for (let attempt = 0; attempt < timestamps.length; attempt++) {
+      const extractTime = timestamps[attempt];
+      console.log(`OCR Attempt ${attempt + 1}/${timestamps.length}: Extracting frame at time ${extractTime.toFixed(2)}s...`);
 
-    if (!fs.existsSync(extractedFramePath)) {
-      throw new Error('Frame extraction failed for OCR.');
+      const extractedFramePath = path.join(this.tempDir, `ocr_frame_attempt_${attempt}.png`);
+      const maskedFramePath = path.join(this.tempDir, `ocr_frame_attempt_${attempt}_masked.png`);
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const args = [
+            '-y',
+            '-ss', extractTime.toString(),
+            '-i', videoPath,
+            '-vframes', '1',
+            extractedFramePath,
+          ];
+          console.log(`Extracting frame for OCR: ${ffmpegPath} ${args.join(' ')}`);
+          const child = spawn(ffmpegPath, args);
+          if (jobId) {
+            getProcessRegistry().register(jobId, child);
+          }
+          child.on('close', (code) => {
+            if (jobId) {
+              getProcessRegistry().unregister(jobId);
+            }
+            if (code === 0) resolve();
+            else reject(new Error(`Failed to extract OCR frame. Code: ${code}`));
+          });
+          child.on('error', (err) => {
+            if (jobId) {
+              getProcessRegistry().unregister(jobId);
+            }
+            reject(err);
+          });
+        });
+
+        if (!fs.existsSync(extractedFramePath)) {
+          throw new Error('Frame extraction failed for OCR.');
+        }
+
+        // 2. Load frame metadata (width, height)
+        const image = sharp(extractedFramePath);
+        const { width, height } = await image.metadata();
+        if (!width || !height) {
+          throw new Error('Could not read image dimensions for OCR.');
+        }
+
+        // 3. Mask out everything below the top-header headline area (starting Y of cropped video)
+        const compositeOperations: any[] = [];
+        const cutOffY = activeVideoArea ? activeVideoArea.y : Math.round(height * 0.35);
+        const maskHeight = height - cutOffY;
+
+        if (maskHeight > 0) {
+          compositeOperations.push({
+            input: {
+              create: {
+                width: width,
+                height: maskHeight,
+                channels: 3,
+                background: { r: 0, g: 0, b: 0 },
+              },
+            },
+            left: 0,
+            top: cutOffY,
+          });
+        }
+
+        // Create the masked image
+        await image
+          .composite(compositeOperations)
+          .toFile(maskedFramePath);
+
+        // 4. Run Tesseract OCR on the masked image
+        console.log('Running Tesseract.js on masked frame...');
+        const worker = await createWorker('eng');
+        const { data: { text } } = await worker.recognize(maskedFramePath);
+        await worker.terminate();
+
+        const cleanedText = this.cleanExtractedText(text);
+        const wordCount = cleanedText.trim().split(/\s+/).filter(Boolean).length;
+        console.log(`OCR Attempt ${attempt + 1} extracted ${wordCount} words: "${cleanedText}"`);
+
+        if (wordCount > maxWordsCount) {
+          maxWordsCount = wordCount;
+          bestText = cleanedText;
+        }
+
+        if (wordCount >= 10) {
+          console.log(`OCR successful with ${wordCount} words (>= 10). Stopping search.`);
+          return cleanedText;
+        }
+      } catch (err) {
+        console.error(`OCR Attempt ${attempt + 1} failed:`, err);
+      } finally {
+        // Clean up current attempt files
+        if (fs.existsSync(extractedFramePath)) {
+          try { fs.unlinkSync(extractedFramePath); } catch (e) {}
+        }
+        if (fs.existsSync(maskedFramePath)) {
+          try { fs.unlinkSync(maskedFramePath); } catch (e) {}
+        }
+      }
     }
 
-    // 2. Load frame metadata (width, height)
-    const image = sharp(extractedFramePath);
-    const { width, height } = await image.metadata();
-    if (!width || !height) {
-      throw new Error('Could not read image dimensions for OCR.');
-    }
-
-    // 3. Mask out active video region and bottom comment/metadata region
-    // The headline usually occupies the top 30% of the canvas.
-    const compositeOperations: any[] = [];
-
-    // Mask active video area (black out the moving video)
-    if (activeVideoArea) {
-      compositeOperations.push({
-        input: {
-          create: {
-            width: activeVideoArea.width,
-            height: activeVideoArea.height,
-            channels: 3,
-            background: { r: 0, g: 0, b: 0 },
-          },
-        },
-        left: activeVideoArea.x,
-        top: activeVideoArea.y,
-      });
-    }
-
-    // Black out bottom 25% (usernames, comments, likes, overlays)
-    const bottomHeight = Math.round(height * 0.25);
-    compositeOperations.push({
-      input: {
-        create: {
-          width: width,
-          height: bottomHeight,
-          channels: 3,
-          background: { r: 0, g: 0, b: 0 },
-        },
-      },
-      left: 0,
-      top: height - bottomHeight,
-    });
-
-    const maskedFramePath = path.join(this.tempDir, 'ocr_frame_masked.png');
-
-    // Create the masked image
-    await image
-      .composite(compositeOperations)
-      .toFile(maskedFramePath);
-
-    // 4. Run Tesseract OCR on the masked image
-    console.log('Running Tesseract.js on masked frame...');
-    
-    // We create a local worker. It will download the english data pack once and cache it in the system temp directory.
-    const worker = await createWorker('eng');
-    const { data: { text } } = await worker.recognize(maskedFramePath);
-    await worker.terminate();
-
-    // Clean up files
-    this.cleanTempDir();
-
-    // 5. Clean OCR output
-    return this.cleanExtractedText(text);
+    console.log(`Could not find a frame with >= 10 words. Returning best attempt with ${maxWordsCount} words: "${bestText}"`);
+    return bestText;
   }
 
   private cleanExtractedText(rawText: string): string {

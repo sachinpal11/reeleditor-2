@@ -16,6 +16,18 @@ export interface DownloadProgress {
 
 export type RewriteMode = 'Original' | 'Rewrite' | 'Short' | 'Curiosity' | 'Viral' | 'Question';
 
+export type WordStyle = 'Regular' | 'Bold' | 'Brand';
+
+export interface StyledSegment {
+  text: string;
+  style: WordStyle;
+}
+
+export interface HeadlineResponse {
+  headline: string;
+  lines: StyledSegment[][];
+}
+
 export interface Job {
   id: string;
   status: JobStatus;
@@ -24,6 +36,7 @@ export interface Job {
   croppedVideoPath?: string;
   headline?: string;
   rewrittenHeadline?: string;
+  structuredHeadline?: HeadlineResponse;
   selectedTemplateId: string;
   rewriteMode: RewriteMode;
   outputVideoPath?: string;
@@ -59,6 +72,9 @@ export interface TextProperties extends Position {
   textStyle?: 'regular' | 'bold' | 'brand-bold';
   previewText?: string;
   wordStyles?: ('regular' | 'bold' | 'brand-bold')[];
+  customPrompt?: string;
+  aiModel?: string;
+  aiService?: 'gemini' | 'openrouter' | 'local';
 }
 
 export interface Template {
@@ -89,7 +105,10 @@ export interface AppConfig {
   ffprobePath: string;
   ytdlpPath: string;
   geminiApiKey: string;
-  aiMode: 'local' | 'gemini';
+  geminiModel?: string;
+  openrouterApiKey?: string;
+  openrouterModel?: string;
+  aiMode: 'local' | 'gemini' | 'openrouter';
   defaultExportDir: string;
   concurrency: number;
   cookiesBrowser?: string;

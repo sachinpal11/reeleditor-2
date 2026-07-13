@@ -242,7 +242,7 @@ export const SettingsPage: React.FC = () => {
             <div className="space-y-4">
               <div>
                 <label className="text-xs text-zinc-400 block mb-1.5 font-medium font-semibold">AI Rewrite Engine</label>
-                <div className="flex gap-4">
+                <div className="flex flex-wrap gap-4">
                   <label className="flex items-center gap-2 text-zinc-300 text-sm cursor-pointer select-none">
                     <input
                       type="radio"
@@ -261,21 +261,111 @@ export const SettingsPage: React.FC = () => {
                     />
                     Google Gemini API
                   </label>
+                  <label className="flex items-center gap-2 text-zinc-300 text-sm cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      checked={localConfig.aiMode === 'openrouter'}
+                      onChange={(): void => setLocalConfig({ ...localConfig, aiMode: 'openrouter' })}
+                      className="accent-indigo-500 w-4 h-4 cursor-pointer"
+                    />
+                    OpenRouter API
+                  </label>
                 </div>
               </div>
 
               {localConfig.aiMode === 'gemini' && (
-                <div>
-                  <label className="text-xs text-zinc-400 block mb-1.5 font-medium">Gemini API Key</label>
-                  <input
-                    type="password"
-                    placeholder="Enter AIzaSy..."
-                    value={localConfig.geminiApiKey}
-                    onChange={(e): void => setLocalConfig({ ...localConfig, geminiApiKey: e.target.value })}
-                    className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2.5 text-sm text-white placeholder-zinc-700 focus:outline-none focus:border-indigo-500 font-mono"
-                  />
+                <div className="space-y-3 pl-2 border-l border-zinc-850">
+                  <div>
+                    <label className="text-xs text-zinc-400 block mb-1.5 font-medium">Gemini API Key</label>
+                    <input
+                      type="password"
+                      placeholder="Enter AIzaSy..."
+                      value={localConfig.geminiApiKey}
+                      onChange={(e): void => setLocalConfig({ ...localConfig, geminiApiKey: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2.5 text-sm text-white placeholder-zinc-700 focus:outline-none focus:border-indigo-500 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-zinc-400 block mb-1.5 font-medium">Gemini Model</label>
+                    <select
+                      value={localConfig.geminiModel || 'gemini-1.5-flash'}
+                      onChange={(e): void => setLocalConfig({ ...localConfig, geminiModel: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-855 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="gemini-1.5-flash">gemini-1.5-flash (Fast, recommended)</option>
+                      <option value="gemini-1.5-pro">gemini-1.5-pro (More detailed)</option>
+                      <option value="gemini-2.0-flash-exp">gemini-2.0-flash-exp (Experimental)</option>
+                      <option value="gemini-2.5-flash">gemini-2.5-flash (Latest Flash)</option>
+                      <option value="gemini-2.5-pro">gemini-2.5-pro (Latest Pro)</option>
+                    </select>
+                  </div>
                   <p className="text-[10px] text-zinc-500 mt-1">
                     Your key is saved locally in config.json and is never uploaded.
+                  </p>
+                </div>
+              )}
+
+              {localConfig.aiMode === 'openrouter' && (
+                <div className="space-y-3 pl-2 border-l border-zinc-850">
+                  <div>
+                    <label className="text-xs text-zinc-400 block mb-1.5 font-medium">OpenRouter API Key</label>
+                    <input
+                      type="password"
+                      placeholder="Enter sk-or-v1-..."
+                      value={localConfig.openrouterApiKey || ''}
+                      onChange={(e): void => setLocalConfig({ ...localConfig, openrouterApiKey: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2.5 text-sm text-white placeholder-zinc-700 focus:outline-none focus:border-indigo-500 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-zinc-400 block mb-1.5 font-medium">OpenRouter Model</label>
+                    <div className="space-y-2">
+                      <select
+                        value={[
+                          'google/gemini-2.5-flash',
+                          'google/gemini-2.5-pro',
+                          'anthropic/claude-3.5-sonnet',
+                          'meta-llama/llama-3.1-70b-instruct',
+                          'mistralai/mistral-large'
+                        ].includes(localConfig.openrouterModel || '') ? localConfig.openrouterModel : 'custom'}
+                        onChange={(e): void => {
+                          const val = e.target.value;
+                          if (val !== 'custom') {
+                            setLocalConfig({ ...localConfig, openrouterModel: val });
+                          } else {
+                            setLocalConfig({ ...localConfig, openrouterModel: '' });
+                          }
+                        }}
+                        className="w-full bg-zinc-950 border border-zinc-855 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="google/gemini-2.5-flash">Gemini 2.5 Flash (google/gemini-2.5-flash)</option>
+                        <option value="google/gemini-2.5-pro">Gemini 2.5 Pro (google/gemini-2.5-pro)</option>
+                        <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet (anthropic/claude-3.5-sonnet)</option>
+                        <option value="meta-llama/llama-3.1-70b-instruct">Llama 3.1 70B (meta-llama/llama-3.1-70b-instruct)</option>
+                        <option value="mistralai/mistral-large">Mistral Large (mistralai/mistral-large)</option>
+                        <option value="custom">Custom model identifier...</option>
+                      </select>
+                      
+                      {(![
+                        'google/gemini-2.5-flash',
+                        'google/gemini-2.5-pro',
+                        'anthropic/claude-3.5-sonnet',
+                        'meta-llama/llama-3.1-70b-instruct',
+                        'mistralai/mistral-large'
+                      ].includes(localConfig.openrouterModel || '') || 
+                        !localConfig.openrouterModel) && (
+                        <input
+                          type="text"
+                          placeholder="e.g. google/gemini-2.5-flash"
+                          value={localConfig.openrouterModel || ''}
+                          onChange={(e): void => setLocalConfig({ ...localConfig, openrouterModel: e.target.value })}
+                          className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2.5 text-sm text-white placeholder-zinc-700 focus:outline-none focus:border-indigo-500 font-mono"
+                        />
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-zinc-500 mt-1">
+                    Select a model or enter any valid OpenRouter model identifier string.
                   </p>
                 </div>
               )}

@@ -4,24 +4,47 @@ import { getConfigStore } from '../storage/configStore';
 import * as https from 'https';
 
 export class AiRewriter implements IAiRewriter {
-  public async rewrite(text: string, mode: RewriteMode): Promise<string> {
+  public async rewrite(
+    text: string,
+    mode: RewriteMode,
+    options?: {
+      aiModel?: string;
+      aiService?: 'gemini' | 'openrouter' | 'local';
+    }
+  ): Promise<string> {
     if (!text || text.trim() === '') return '';
 
     const config = getConfigStore().getConfig();
-    const apiKey = config.geminiApiKey;
+    const service = options?.aiService || config.aiMode;
 
-    if (config.aiMode === 'gemini' && apiKey && apiKey.trim() !== '') {
-      try {
-        console.log(`Rewriting headline using Gemini AI in mode: ${mode}`);
-        return await this.rewriteWithGemini(text, mode, apiKey);
-      } catch (err) {
-        console.error('Gemini rewrite failed, falling back to local rewriter:', err);
-        return this.rewriteLocally(text, mode);
+    if (service === 'gemini') {
+      const apiKey = config.geminiApiKey;
+      const model = options?.aiModel || config.geminiModel || 'gemini-1.5-flash';
+      if (apiKey && apiKey.trim() !== '') {
+        try {
+          console.log(`Rewriting headline using Gemini AI (model: ${model}) in mode: ${mode}`);
+          return await this.rewriteWithGemini(text, mode, model, apiKey);
+        } catch (err) {
+          console.error('Gemini rewrite failed, falling back to local rewriter:', err);
+          return this.rewriteLocally(text, mode);
+        }
       }
-    } else {
-      console.log(`Rewriting headline locally (no API key or local mode) in mode: ${mode}`);
-      return this.rewriteLocally(text, mode);
+    } else if (service === 'openrouter') {
+      const apiKey = config.openrouterApiKey;
+      const model = options?.aiModel || config.openrouterModel || 'google/gemini-2.5-flash';
+      if (apiKey && apiKey.trim() !== '') {
+        try {
+          console.log(`Rewriting headline using OpenRouter AI (model: ${model}) in mode: ${mode}`);
+          return await this.rewriteWithOpenRouter(text, mode, model, apiKey);
+        } catch (err) {
+          console.error('OpenRouter rewrite failed, falling back to local rewriter:', err);
+          return this.rewriteLocally(text, mode);
+        }
+      }
     }
+
+    console.log(`Rewriting headline locally (local mode or no API credentials) in mode: ${mode}`);
+    return this.rewriteLocally(text, mode);
   }
 
   private rewriteLocally(text: string, mode: RewriteMode): string {
@@ -44,32 +67,33 @@ export class AiRewriter implements IAiRewriter {
     }
   }
 
-  private rewriteWithGemini(text: string, mode: RewriteMode, apiKey: string): Promise<string> {
+  private getPromptForMode(text: string, mode: RewriteMode): string {
+    switch (mode) {
+      case 'Original':
+        return text;
+      case 'Rewrite':
+        return `Paraphrase this short headline to make it more engaging and clear: "${text}". Keep it short (under 8 words). Respond with only the rewritten headline.`;
+      case 'Short':
+        return `Shorten this headline to 3-5 punchy words: "${text}". Respond with only the shortened headline.`;
+      case 'Curiosity':
+        return `Rewrite this headline to create massive curiosity/mystery: "${text}". Keep it under 8 words. Respond with only the rewritten headline.`;
+      case 'Viral':
+        return `Rewrite this headline to make it a viral hook with an emoji: "${text}". Keep it punchy and under 8 words. Respond with only the rewritten headline.`;
+      case 'Question':
+        return `Turn this headline into an engaging question: "${text}". Keep it under 8 words. Respond with only the question.`;
+      default:
+        return `Clean up and format this headline: "${text}". Respond with only the cleaned headline.`;
+    }
+  }
+
+  private rewriteWithGemini(text: string, mode: RewriteMode, model: string, apiKey: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      let prompt = '';
-      switch (mode) {
-        case 'Original':
-          resolve(text);
-          return;
-        case 'Rewrite':
-          prompt = `Paraphrase this short headline to make it more engaging and clear: "${text}". Keep it short (under 8 words). Respond with only the rewritten headline.`;
-          break;
-        case 'Short':
-          prompt = `Shorten this headline to 3-5 punchy words: "${text}". Respond with only the shortened headline.`;
-          break;
-        case 'Curiosity':
-          prompt = `Rewrite this headline to create massive curiosity/mystery: "${text}". Keep it under 8 words. Respond with only the rewritten headline.`;
-          break;
-        case 'Viral':
-          prompt = `Rewrite this headline to make it a viral hook with an emoji: "${text}". Keep it punchy and under 8 words. Respond with only the rewritten headline.`;
-          break;
-        case 'Question':
-          prompt = `Turn this headline into an engaging question: "${text}". Keep it under 8 words. Respond with only the question.`;
-          break;
-        default:
-          prompt = `Clean up and format this headline: "${text}". Respond with only the cleaned headline.`;
+      if (mode === 'Original') {
+        resolve(text);
+        return;
       }
 
+      const prompt = this.getPromptForMode(text, mode);
       const postData = JSON.stringify({
         contents: [
           {
@@ -88,7 +112,7 @@ export class AiRewriter implements IAiRewriter {
 
       const options = {
         hostname: 'generativelanguage.googleapis.com',
-        path: `/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+        path: `/v1beta/models/${model}:generateContent?key=${apiKey}`,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -113,7 +137,6 @@ export class AiRewriter implements IAiRewriter {
             const generatedText = response.candidates?.[0]?.content?.parts?.[0]?.text;
             
             if (generatedText) {
-              // Strip quotes and trim whitespace/newlines
               resolve(generatedText.replace(/^["']|["']$/g, '').trim());
             } else {
               reject(new Error(`Unexpected response structure: ${body}`));
@@ -126,6 +149,74 @@ export class AiRewriter implements IAiRewriter {
 
       req.on('error', (e) => {
         reject(new Error(`Network error calling Gemini API: ${e.message}`));
+      });
+
+      req.write(postData);
+      req.end();
+    });
+  }
+
+  private rewriteWithOpenRouter(text: string, mode: RewriteMode, model: string, apiKey: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      if (mode === 'Original') {
+        resolve(text);
+        return;
+      }
+
+      const prompt = this.getPromptForMode(text, mode);
+      const postData = JSON.stringify({
+        model: model,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.7
+      });
+
+      const options = {
+        hostname: 'openrouter.ai',
+        path: '/api/v1/chat/completions',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': 'http://localhost:3000',
+          'X-Title': 'ReelEditor',
+          'Content-Length': Buffer.byteLength(postData),
+        },
+      };
+
+      const req = https.request(options, (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+
+        res.on('end', () => {
+          try {
+            if (res.statusCode !== 200) {
+              reject(new Error(`OpenRouter API returned status code ${res.statusCode}: ${body}`));
+              return;
+            }
+
+            const response = JSON.parse(body);
+            const generatedText = response.choices?.[0]?.message?.content;
+            
+            if (generatedText) {
+              resolve(generatedText.replace(/^["']|["']$/g, '').trim());
+            } else {
+              reject(new Error(`Unexpected response structure: ${body}`));
+            }
+          } catch (e: any) {
+            reject(new Error(`Failed to parse OpenRouter API response: ${e.message}`));
+          }
+        });
+      });
+
+      req.on('error', (e) => {
+        reject(new Error(`Network error calling OpenRouter API: ${e.message}`));
       });
 
       req.write(postData);

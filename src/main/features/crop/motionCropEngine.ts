@@ -5,6 +5,7 @@ import { app } from 'electron';
 import sharp from 'sharp';
 import { CropResult, ICropEngine } from '../../../core/ports/ICropEngine';
 import { getConfigStore } from '../storage/configStore';
+import { getProcessRegistry } from '../jobs/processRegistry';
 
 export class MotionCropEngine implements ICropEngine {
   private tempDir: string;
@@ -51,7 +52,7 @@ export class MotionCropEngine implements ICropEngine {
     return { width, height, duration };
   }
 
-  public async detectActiveVideoArea(videoPath: string): Promise<CropResult> {
+  public async detectActiveVideoArea(videoPath: string, jobId?: string): Promise<CropResult> {
     this.cleanTempDir();
     const { width: origWidth, height: origHeight, duration } = this.getVideoDimensions(videoPath);
 
@@ -71,11 +72,22 @@ export class MotionCropEngine implements ICropEngine {
       ];
       console.log(`Extracting frames with ffmpeg: ${ffmpegPath} ${args.join(' ')}`);
       const child = spawn(ffmpegPath, args);
+      if (jobId) {
+        getProcessRegistry().register(jobId, child);
+      }
       child.on('close', (code) => {
+        if (jobId) {
+          getProcessRegistry().unregister(jobId);
+        }
         if (code === 0) resolve();
         else reject(new Error(`Failed to extract frames. Exit code: ${code}`));
       });
-      child.on('error', reject);
+      child.on('error', (err) => {
+        if (jobId) {
+          getProcessRegistry().unregister(jobId);
+        }
+        reject(err);
+      });
     });
 
     // Read all extracted frame files
@@ -179,7 +191,7 @@ export class MotionCropEngine implements ICropEngine {
     return { x: cropX, y: cropY, width: cropW, height: cropH };
   }
 
-  public cropVideo(videoPath: string, crop: CropResult, outputPath: string): Promise<string> {
+  public cropVideo(videoPath: string, crop: CropResult, outputPath: string, jobId?: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const config = getConfigStore().getConfig();
       const ffmpegPath = config.ffmpegPath || 'ffmpeg';
@@ -203,6 +215,9 @@ export class MotionCropEngine implements ICropEngine {
 
       console.log(`Executing FFmpeg crop: ${ffmpegPath} ${args.join(' ')}`);
       const child = spawn(ffmpegPath, args);
+      if (jobId) {
+        getProcessRegistry().register(jobId, child);
+      }
 
       let lastStderr = '';
       child.stderr.on('data', (data) => {
@@ -210,6 +225,9 @@ export class MotionCropEngine implements ICropEngine {
       });
 
       child.on('close', (code) => {
+        if (jobId) {
+          getProcessRegistry().unregister(jobId);
+        }
         if (code === 0 && fs.existsSync(outputPath)) {
           resolve(outputPath);
         } else {
@@ -218,6 +236,9 @@ export class MotionCropEngine implements ICropEngine {
       });
 
       child.on('error', (err) => {
+        if (jobId) {
+          getProcessRegistry().unregister(jobId);
+        }
         reject(new Error(`FFmpeg failed to start: ${err.message}`));
       });
     });

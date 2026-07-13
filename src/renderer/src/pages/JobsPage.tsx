@@ -2,11 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../hooks/useAppStore';
 import { Job, RewriteMode } from '../../../shared/types';
 import { useToastStore } from '../hooks/useToastStore';
+import { HeadlineRenderer } from '../components/template/HeadlineRenderer';
 
 export const JobsPage: React.FC = () => {
   const { templates, jobs, createJobs, controlJob, clearCompletedJobs, setJobs } = useAppStore();
   const { addToast } = useToastStore();
-  const [urlsInput, setUrlsInput] = useState('');
+  const [urls, setUrls] = useState<string[]>([]);
+  const [currentUrl, setCurrentUrl] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [rewriteMode, setRewriteMode] = useState<RewriteMode>('Original');
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
@@ -45,12 +47,19 @@ export const JobsPage: React.FC = () => {
 
   const handleStartQueue = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
-    const urls = urlsInput
-      .split('\n')
-      .map((u) => u.trim())
-      .filter((u) => u.length > 0);
+    
+    // Auto-add current input if they forgot to press Enter
+    let finalUrls = [...urls];
+    const trimmedCurrent = currentUrl.trim();
+    if (trimmedCurrent) {
+      if (!finalUrls.includes(trimmedCurrent)) {
+        finalUrls.push(trimmedCurrent);
+      }
+      setUrls(finalUrls);
+      setCurrentUrl('');
+    }
 
-    if (urls.length === 0) {
+    if (finalUrls.length === 0) {
       addToast('Please enter at least one Instagram URL.', 'warning');
       return;
     }
@@ -60,15 +69,22 @@ export const JobsPage: React.FC = () => {
     }
 
     try {
-      await createJobs(urls, selectedTemplateId, rewriteMode);
-      setUrlsInput('');
+      await createJobs(finalUrls, selectedTemplateId, rewriteMode);
+      setUrls([]);
       addToast('Jobs successfully added to queue!', 'success');
     } catch (err: any) {
       addToast(`Failed to add jobs to queue: ${err.message}`, 'error');
     }
   };
 
-  const selectedJob = jobs.find((j) => j.id === selectedJobId) || jobs[0];
+  // Auto-select the currently active/running job, or the first waiting job, or fall back to the first job in the queue
+  const activeJob = jobs.find((j) => 
+    j.status !== 'Completed' && 
+    j.status !== 'Failed' && 
+    j.status !== 'Waiting'
+  ) || jobs.find((j) => j.status === 'Waiting') || jobs[0];
+
+  const selectedJob = jobs.find((j) => j.id === selectedJobId) || activeJob;
 
   const getStatusColor = (status: Job['status']): string => {
     switch (status) {
@@ -101,15 +117,70 @@ export const JobsPage: React.FC = () => {
           <form onSubmit={handleStartQueue} className="space-y-4">
             <div>
               <label className="text-xs text-zinc-400 block mb-1.5 font-medium">
-                Instagram Video URLs (One per line)
+                Instagram Video URLs
               </label>
-              <textarea
-                value={urlsInput}
-                onChange={(e): void => setUrlsInput(e.target.value)}
-                placeholder="https://www.instagram.com/reel/C8..."
-                rows={3}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition font-mono"
-              />
+              <div className="flex flex-col gap-2.5">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={currentUrl}
+                    onChange={(e): void => setCurrentUrl(e.target.value)}
+                    onKeyDown={(e): void => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const trimmed = currentUrl.trim();
+                        if (trimmed) {
+                          if (!urls.includes(trimmed)) {
+                            setUrls([...urls, trimmed]);
+                          }
+                          setCurrentUrl('');
+                        }
+                      }
+                    }}
+                    placeholder="Paste URL and press Enter to add..."
+                    className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-650 focus:outline-none focus:border-indigo-500 transition font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={(): void => {
+                      const trimmed = currentUrl.trim();
+                      if (trimmed) {
+                        if (!urls.includes(trimmed)) {
+                          setUrls([...urls, trimmed]);
+                        }
+                        setCurrentUrl('');
+                      }
+                    }}
+                    className="px-4 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-700/80 text-zinc-300 text-xs font-semibold rounded-lg transition cursor-pointer"
+                  >
+                    Add
+                  </button>
+                </div>
+                
+                {urls.length > 0 && (
+                  <div className="flex flex-wrap gap-2 p-2.5 bg-zinc-950/60 border border-zinc-800/80 rounded-lg min-h-[42px] items-center">
+                    {urls.map((url, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 bg-indigo-950/40 text-indigo-400 border border-indigo-900/35 rounded-full text-xs font-mono select-none"
+                      >
+                        <span className="truncate max-w-[280px]" title={url}>
+                          {url}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(): void => {
+                            setUrls(urls.filter((_, i) => i !== idx));
+                          }}
+                          className="w-4 h-4 rounded-full flex items-center justify-center hover:bg-indigo-900/40 text-indigo-400 hover:text-indigo-300 font-bold transition focus:outline-none cursor-pointer"
+                        >
+                          &times;
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="flex gap-4 items-end">
@@ -189,7 +260,7 @@ export const JobsPage: React.FC = () => {
                   key={job.id}
                   onClick={(): void => setSelectedJobId(job.id)}
                   className={`flex flex-col p-4 rounded-lg border transition cursor-pointer ${
-                    selectedJobId === job.id || (!selectedJobId && jobs[0]?.id === job.id)
+                    selectedJob && selectedJob.id === job.id
                       ? 'bg-zinc-800/80 border-zinc-700 shadow-md'
                       : 'bg-zinc-800/20 border-zinc-800 hover:bg-zinc-800/40 hover:border-zinc-700'
                   }`}
@@ -283,10 +354,18 @@ export const JobsPage: React.FC = () => {
               </div>
               {selectedJob.headline && (
                 <div className="flex flex-col gap-1 border-t border-zinc-800/40 pt-2">
-                  <span className="text-zinc-600">Extracted Text:</span>
-                  <span className="text-zinc-300 bg-zinc-900/50 p-1.5 rounded border border-zinc-800/30 truncate" title={selectedJob.headline}>
+                  <span className="text-zinc-600">Extracted Raw OCR:</span>
+                  <span className="text-zinc-400 bg-zinc-900/30 p-1.5 rounded border border-zinc-850 truncate font-mono" title={selectedJob.headline}>
                     {selectedJob.headline}
                   </span>
+                </div>
+              )}
+              {selectedJob.structuredHeadline && (
+                <div className="flex flex-col gap-1 border-t border-zinc-800/40 pt-2">
+                  <span className="text-zinc-600">Cleaned & Highlighted Headline:</span>
+                  <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/40 mt-0.5">
+                    <HeadlineRenderer headline={selectedJob.structuredHeadline} />
+                  </div>
                 </div>
               )}
               {selectedJob.outputVideoPath && (

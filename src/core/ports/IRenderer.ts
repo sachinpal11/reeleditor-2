@@ -6,6 +6,7 @@ export interface IRenderer {
     videoPath: string,
     headline: string,
     outputPath: string,
-    onProgress: (progress: number) => void
+    onProgress: (progress: number) => void,
+    jobId?: string
   ): Promise<string>;
 }

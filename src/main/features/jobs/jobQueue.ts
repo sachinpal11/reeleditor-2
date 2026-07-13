@@ -1,12 +1,14 @@
 import { BrowserWindow } from 'electron';
-import { Job, JobStatus, RewriteMode } from '../../../shared/types';
+import { Job, JobStatus, RewriteMode, Template } from '../../../shared/types';
 import { getAiRewriter } from '../ai/aiRewriter';
+import { getHeadlineAnalyzer } from '../ai/HeadlineAnalyzer';
 import { getDownloader } from '../downloader/ytDlpDownloader';
 import { getCropEngine } from '../crop/motionCropEngine';
 import { getOcrEngine } from '../ocr/tesseractOcrEngine';
 import { getRenderer } from '../renderer/ffmpegRenderer';
 import { getConfigStore } from '../storage/configStore';
 import { getTemplateStore } from '../storage/templateStore';
+import { getProcessRegistry } from './processRegistry';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -49,8 +51,8 @@ export class JobQueue {
     job.logs.push(`Action requested: ${action}`);
     
     if (action === 'cancel') {
+      getProcessRegistry().kill(id);
       if (job.status === 'Downloading' || job.status === 'Cropping' || job.status === 'OCR' || job.status === 'Rewriting' || job.status === 'Rendering') {
-        // In real app, we would kill the subprocesses here.
         job.status = 'Failed';
         job.errorMessage = 'Job cancelled by user';
         job.logs.push('Job execution cancelled.');
@@ -89,6 +91,11 @@ export class JobQueue {
   private updateJobStatus(jobId: string, status: JobStatus, progress: number, log?: string, error?: string): void {
     const job = this.jobs.find((j) => j.id === jobId);
     if (!job) return;
+
+    // Ignore progress updates if job was already terminated
+    if (job.status === 'Failed' || job.status === 'Completed') {
+      return;
+    }
 
     job.status = status;
     job.progress = progress;
@@ -149,7 +156,7 @@ export class JobQueue {
       // 2. Crop Phase
       this.updateJobStatus(job.id, 'Cropping', 0, 'Detecting active video area...');
       const cropEngine = getCropEngine();
-      const activeArea = await cropEngine.detectActiveVideoArea(videoPath);
+      const activeArea = await cropEngine.detectActiveVideoArea(videoPath, job.id);
       this.updateJobStatus(
         job.id,
         'Cropping',
@@ -158,7 +165,7 @@ export class JobQueue {
       );
 
       const croppedPath = path.join(path.dirname(videoPath), `${job.id}_cropped.mp4`);
-      await cropEngine.cropVideo(videoPath, activeArea, croppedPath);
+      await cropEngine.cropVideo(videoPath, activeArea, croppedPath, job.id);
       job.croppedVideoPath = croppedPath;
       this.updateJobStatus(job.id, 'Cropping', 100, `Cropping completed successfully. Saved to: ${croppedPath}`);
 
@@ -167,18 +174,44 @@ export class JobQueue {
       // 3. OCR Phase
       this.updateJobStatus(job.id, 'OCR', 0, 'Extracting headline from video using OCR...');
       const ocrEngine = getOcrEngine();
-      const headline = await ocrEngine.extractText(videoPath, activeArea);
+      const headline = await ocrEngine.extractText(videoPath, activeArea, job.id);
       job.headline = headline || 'Untitled Reel';
       this.updateJobStatus(job.id, 'OCR', 100, `OCR successful. Extracted headline: "${job.headline}"`);
 
       if (this.isJobCancelled(job.id)) return;
 
-      // 4. AI Rewrite Phase
-      this.updateJobStatus(job.id, 'Rewriting', 0, `Rewriting headline using mode: ${job.rewriteMode}...`);
-      const aiRewriter = getAiRewriter();
-      const rewritten = await aiRewriter.rewrite(job.headline || '', job.rewriteMode);
-      job.rewrittenHeadline = rewritten;
-      this.updateJobStatus(job.id, 'Rewriting', 100, `Headline ready: "${job.rewrittenHeadline}"`);
+      // 4. AI Rewrite & Structure Analysis Phase
+      this.updateJobStatus(job.id, 'Rewriting', 0, `Processing headline rewrite (mode: ${job.rewriteMode})...`);
+      let textToAnalyze = job.headline || '';
+
+      const template = getTemplateStore().getTemplate(job.selectedTemplateId);
+      if (!template) {
+        throw new Error(`Template not found: ${job.selectedTemplateId}`);
+      }
+
+      if (job.rewriteMode !== 'Original') {
+        const aiRewriter = getAiRewriter();
+        textToAnalyze = await aiRewriter.rewrite(textToAnalyze, job.rewriteMode, {
+          aiModel: template.headline.aiModel,
+          aiService: template.headline.aiService,
+        });
+      }
+
+      this.updateJobStatus(job.id, 'Rewriting', 50, `Analyzing and structuring word highlighting...`);
+      const headlineAnalyzer = getHeadlineAnalyzer();
+      const structuredHeadline = await headlineAnalyzer.analyze(textToAnalyze, {
+        customPrompt: template.headline.customPrompt,
+        aiModel: template.headline.aiModel,
+        aiService: template.headline.aiService,
+      });
+      job.structuredHeadline = structuredHeadline;
+      job.rewrittenHeadline = structuredHeadline.headline;
+      this.updateJobStatus(
+        job.id,
+        'Rewriting',
+        100,
+        `Headline cleaned and structured successfully: "${job.rewrittenHeadline}"`
+      );
 
       if (this.isJobCancelled(job.id)) return;
 
@@ -191,25 +224,47 @@ export class JobQueue {
       }
       const outputVideoPath = path.join(outputDir, `${job.id}_rendered.mp4`);
 
-      const template = getTemplateStore().getTemplate(job.selectedTemplateId);
-      if (!template) {
-        throw new Error(`Template not found: ${job.selectedTemplateId}`);
+      // Inject the AI-analyzed word styles into the template for final rendering
+      const updatedTemplate = JSON.parse(JSON.stringify(template)) as Template;
+      let headlineText = job.rewrittenHeadline || job.headline || '';
+
+      if (job.structuredHeadline) {
+        // Flatten all segments to get a single array of styles
+        const flatStyles: ('regular' | 'bold' | 'brand-bold')[] = [];
+        for (const line of job.structuredHeadline.lines) {
+          for (const segment of line) {
+            const styleMap: Record<string, 'regular' | 'bold' | 'brand-bold'> = {
+              'Regular': 'regular',
+              'Bold': 'bold',
+              'Brand': 'brand-bold'
+            };
+            flatStyles.push(styleMap[segment.style] || 'regular');
+          }
+        }
+        updatedTemplate.headline.wordStyles = flatStyles;
+
+        // Use the exact line breaks returned by Gemini by joining lines with newlines
+        headlineText = job.structuredHeadline.lines
+          .map((line) => line.map((seg) => seg.text).join(' '))
+          .join('\n');
       }
 
       const renderer = getRenderer();
       await renderer.render(
-        template,
+        updatedTemplate,
         job.croppedVideoPath || videoPath,
-        job.rewrittenHeadline || job.headline || '',
+        headlineText,
         outputVideoPath,
         (progress) => {
           this.updateJobStatus(job.id, 'Rendering', progress, `Rendering: ${progress}%`);
-        }
+        },
+        job.id
       );
 
       job.outputVideoPath = outputVideoPath;
       this.updateJobStatus(job.id, 'Completed', 100, `Rendering finished! Output saved: ${outputVideoPath}`);
     } catch (error: any) {
+      if (this.isJobCancelled(job.id)) return;
       this.updateJobStatus(job.id, 'Failed', 100, undefined, error.message || 'Unknown job failure');
     }
   }
