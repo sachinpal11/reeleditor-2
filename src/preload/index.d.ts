@@ -16,6 +16,7 @@ declare global {
       deleteTemplate(id: string): Promise<boolean>;
       listJobs(): Promise<Job[]>;
       createJobs(urls: string[], templateId: string, rewriteMode: RewriteMode): Promise<boolean>;
+      createJobsFromFiles(filePaths: string[], templateId: string, rewriteMode: RewriteMode): Promise<boolean>;
       controlJob(id: string, action: 'pause' | 'resume' | 'cancel' | 'retry'): Promise<boolean>;
       clearCompletedJobs(): Promise<Job[]>;
       onJobsChanged(callback: (jobs: Job[]) => void): () => void;
@@ -24,6 +25,7 @@ declare global {
       listExports(): Promise<{ name: string; path: string; size: number; createdAt: number }[]>;
       openExportFolder(): Promise<boolean>;
       playExportFile(filePath: string): Promise<boolean>;
+      clearTempDownloads(): Promise<{ deleted: number; freedBytes: number }>;
     };
   }
 }

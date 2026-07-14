@@ -1,19 +1,29 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../hooks/useAppStore';
 import { Job, RewriteMode } from '../../../shared/types';
 import { useToastStore } from '../hooks/useToastStore';
 import { HeadlineRenderer } from '../components/template/HeadlineRenderer';
 
 export const JobsPage: React.FC = () => {
-  const { templates, jobs, createJobs, controlJob, clearCompletedJobs, setJobs } = useAppStore();
+  const { templates, jobs, createJobs, createJobsFromFiles, controlJob, clearCompletedJobs, setJobs } = useAppStore();
   const { addToast } = useToastStore();
-  const [urls, setUrls] = useState<string[]>([]);
-  const [currentUrl, setCurrentUrl] = useState('');
+
+  // Shared
+  const [inputMode, setInputMode] = useState<'url' | 'file'>('url');
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [rewriteMode, setRewriteMode] = useState<RewriteMode>('Original');
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
+  // URL mode
+  const [urls, setUrls] = useState<string[]>([]);
+  const [currentUrl, setCurrentUrl] = useState('');
+
+  // File upload mode
+  const [localFiles, setLocalFiles] = useState<{ name: string; path: string }[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const dropZoneRef = useRef<HTMLDivElement>(null);
 
   // Subscribe to live job updates from Electron main process
   useEffect(() => {
@@ -44,6 +54,28 @@ export const JobsPage: React.FC = () => {
       setSelectedTemplateId(templates[0].id);
     }
   }, [templates]);
+  // Validates that a URL is a valid http/https video URL (any yt-dlp supported platform)
+  const isValidVideoUrl = (url: string): boolean => {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+    } catch {
+      return false;
+    }
+  };
+
+  const handleAddUrl = (raw: string): void => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    if (!isValidVideoUrl(trimmed)) {
+      addToast('Invalid URL. Please enter a valid video link (e.g. youtube.com/..., tiktok.com/..., instagram.com/...).', 'warning');
+      return;
+    }
+    if (!urls.includes(trimmed)) {
+      setUrls([...urls, trimmed]);
+    }
+    setCurrentUrl('');
+  };
 
   const handleStartQueue = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
@@ -52,6 +84,10 @@ export const JobsPage: React.FC = () => {
     let finalUrls = [...urls];
     const trimmedCurrent = currentUrl.trim();
     if (trimmedCurrent) {
+      if (!isValidVideoUrl(trimmedCurrent)) {
+        addToast('Invalid URL. Please enter a valid video link (e.g. youtube.com/..., tiktok.com/..., instagram.com/...).', 'warning');
+        return;
+      }
       if (!finalUrls.includes(trimmedCurrent)) {
         finalUrls.push(trimmedCurrent);
       }
@@ -60,7 +96,7 @@ export const JobsPage: React.FC = () => {
     }
 
     if (finalUrls.length === 0) {
-      addToast('Please enter at least one Instagram URL.', 'warning');
+      addToast('Please enter at least one video URL.', 'warning');
       return;
     }
     if (!selectedTemplateId) {
@@ -76,6 +112,83 @@ export const JobsPage: React.FC = () => {
       addToast(`Failed to add jobs to queue: ${err.message}`, 'error');
     }
   };
+
+  // ─── File upload helpers ───────────────────────────────────────────────────
+  const addLocalFiles = useCallback((files: FileList | File[]): void => {
+    const videoExts = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.flv', '.wmv'];
+    const newFiles: { name: string; path: string }[] = [];
+    Array.from(files).forEach((file) => {
+      const ext = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
+      if (!videoExts.includes(ext)) {
+        addToast(`"${file.name}" is not a supported video format.`, 'warning');
+        return;
+      }
+      // In Electron, File objects from drag-and-drop have a `path` property
+      const filePath = (file as any).path as string | undefined;
+      if (!filePath) {
+        addToast(`Could not get path for "${file.name}". Try using Browse instead.`, 'warning');
+        return;
+      }
+      if (!localFiles.some((f) => f.path === filePath)) {
+        newFiles.push({ name: file.name, path: filePath });
+      }
+    });
+    if (newFiles.length > 0) setLocalFiles((prev) => [...prev, ...newFiles]);
+  }, [localFiles, addToast]);
+
+  const handleBrowseFiles = async (): Promise<void> => {
+    const filePath = await window.api.selectFile([
+      { name: 'Video Files', extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v', 'flv', 'wmv'] },
+    ]);
+    if (filePath) {
+      const name = filePath.split(/[\\/]/).pop() || filePath;
+      if (!localFiles.some((f) => f.path === filePath)) {
+        setLocalFiles((prev) => [...prev, { name, path: filePath }]);
+      }
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent): void => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent): void => {
+    if (!dropZoneRef.current?.contains(e.relatedTarget as Node)) {
+      setIsDragOver(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent): void => {
+    e.preventDefault();
+    setIsDragOver(false);
+    addLocalFiles(e.dataTransfer.files);
+  };
+
+  const handleStartFileQueue = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    if (localFiles.length === 0) {
+      addToast('Please add at least one video file.', 'warning');
+      return;
+    }
+    if (!selectedTemplateId) {
+      addToast('Please select a template first.', 'warning');
+      return;
+    }
+    const count = localFiles.length;
+    try {
+      await createJobsFromFiles(
+        localFiles.map((f) => f.path),
+        selectedTemplateId,
+        rewriteMode
+      );
+      setLocalFiles([]);
+      addToast(`${count} job(s) added to queue from local files!`, 'success');
+    } catch (err: any) {
+      addToast(`Failed to add jobs: ${err.message}`, 'error');
+    }
+  };
+  // ──────────────────────────────────────────────────────────────────────────
 
   // Auto-select the currently active/running job, or the first waiting job, or fall back to the first job in the queue
   const activeJob = jobs.find((j) => 
@@ -113,115 +226,212 @@ export const JobsPage: React.FC = () => {
       <div className="flex-[3] flex flex-col gap-6 min-w-0 h-full">
         {/* Creator panel */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-lg">
-          <h3 className="text-base font-bold text-white mb-3">Create Render Jobs</h3>
-          <form onSubmit={handleStartQueue} className="space-y-4">
-            <div>
-              <label className="text-xs text-zinc-400 block mb-1.5 font-medium">
-                Instagram Video URLs
-              </label>
-              <div className="flex flex-col gap-2.5">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={currentUrl}
-                    onChange={(e): void => setCurrentUrl(e.target.value)}
-                    onKeyDown={(e): void => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        const trimmed = currentUrl.trim();
-                        if (trimmed) {
-                          if (!urls.includes(trimmed)) {
-                            setUrls([...urls, trimmed]);
-                          }
-                          setCurrentUrl('');
-                        }
-                      }
-                    }}
-                    placeholder="Paste URL and press Enter to add..."
-                    className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-650 focus:outline-none focus:border-indigo-500 transition font-mono"
-                  />
-                  <button
-                    type="button"
-                    onClick={(): void => {
-                      const trimmed = currentUrl.trim();
-                      if (trimmed) {
-                        if (!urls.includes(trimmed)) {
-                          setUrls([...urls, trimmed]);
-                        }
-                        setCurrentUrl('');
-                      }
-                    }}
-                    className="px-4 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-700/80 text-zinc-300 text-xs font-semibold rounded-lg transition cursor-pointer"
-                  >
-                    Add
-                  </button>
-                </div>
-                
-                {urls.length > 0 && (
-                  <div className="flex flex-wrap gap-2 p-2.5 bg-zinc-950/60 border border-zinc-800/80 rounded-lg min-h-[42px] items-center">
-                    {urls.map((url, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 bg-indigo-950/40 text-indigo-400 border border-indigo-900/35 rounded-full text-xs font-mono select-none"
-                      >
-                        <span className="truncate max-w-[280px]" title={url}>
-                          {url}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(): void => {
-                            setUrls(urls.filter((_, i) => i !== idx));
-                          }}
-                          className="w-4 h-4 rounded-full flex items-center justify-center hover:bg-indigo-900/40 text-indigo-400 hover:text-indigo-300 font-bold transition focus:outline-none cursor-pointer"
-                        >
-                          &times;
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex gap-4 items-end">
-              <div className="flex-[2]">
-                <label className="text-xs text-zinc-400 block mb-1.5 font-medium">Select Branded Template</label>
-                <select
-                  value={selectedTemplateId}
-                  onChange={(e): void => setSelectedTemplateId(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition"
-                >
-                  <option value="" disabled>Select template...</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex-1">
-                <label className="text-xs text-zinc-400 block mb-1.5 font-medium">AI Headline Mode</label>
-                <select
-                  value={rewriteMode}
-                  onChange={(e): void => setRewriteMode(e.target.value as RewriteMode)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition"
-                >
-                  <option value="Original">Original Text</option>
-                  <option value="Rewrite">Paraphrase</option>
-                  <option value="Short">Short Summary</option>
-                  <option value="Curiosity">Curiosity Hook</option>
-                  <option value="Viral">Viral/Emoji Hook</option>
-                  <option value="Question">Engaging Question</option>
-                </select>
-              </div>
-
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-base font-bold text-white">Create Render Jobs</h3>
+            {/* Tab switcher */}
+            <div className="flex bg-zinc-950 border border-zinc-800 rounded-lg p-0.5 text-xs font-semibold">
               <button
-                type="submit"
-                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded-lg text-sm font-bold shadow-lg shadow-indigo-600/15 transition cursor-pointer"
+                type="button"
+                onClick={(): void => setInputMode('url')}
+                className={`px-3 py-1.5 rounded-md transition cursor-pointer ${
+                  inputMode === 'url'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
               >
-                Add to Queue
+                🔗 URL
+              </button>
+              <button
+                type="button"
+                onClick={(): void => setInputMode('file')}
+                className={`px-3 py-1.5 rounded-md transition cursor-pointer ${
+                  inputMode === 'file'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                📁 Local File
               </button>
             </div>
-          </form>
+          </div>
+
+          {/* ── URL mode ── */}
+          {inputMode === 'url' && (
+            <form onSubmit={handleStartQueue} className="space-y-4">
+              <div>
+                <label className="text-xs text-zinc-400 block mb-1.5 font-medium">
+                  Video URLs (Instagram, YouTube, TikTok, X &amp; more)
+                </label>
+                <div className="flex flex-col gap-2.5">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={currentUrl}
+                      onChange={(e): void => setCurrentUrl(e.target.value)}
+                      onKeyDown={(e): void => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddUrl(currentUrl);
+                        }
+                      }}
+                      placeholder="Paste any video URL (Instagram, YouTube, TikTok, X...) and press Enter"
+                      className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-indigo-500 transition font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={(): void => handleAddUrl(currentUrl)}
+                      className="px-4 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-700/80 text-zinc-300 text-xs font-semibold rounded-lg transition cursor-pointer"
+                    >
+                      Add
+                    </button>
+                  </div>
+
+                  {urls.length > 0 && (
+                    <div className="flex flex-wrap gap-2 p-2.5 bg-zinc-950/60 border border-zinc-800/80 rounded-lg min-h-[42px] items-center">
+                      {urls.map((url, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 bg-indigo-950/40 text-indigo-400 border border-indigo-900/35 rounded-full text-xs font-mono select-none"
+                        >
+                          <span className="truncate max-w-[280px]" title={url}>{url}</span>
+                          <button
+                            type="button"
+                            onClick={(): void => setUrls(urls.filter((_, i) => i !== idx))}
+                            className="w-4 h-4 rounded-full flex items-center justify-center hover:bg-indigo-900/40 text-indigo-400 hover:text-indigo-300 font-bold transition focus:outline-none cursor-pointer"
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex gap-4 items-end">
+                <div className="flex-[2]">
+                  <label className="text-xs text-zinc-400 block mb-1.5 font-medium">Select Branded Template</label>
+                  <select
+                    value={selectedTemplateId}
+                    onChange={(e): void => setSelectedTemplateId(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition"
+                  >
+                    <option value="" disabled>Select template...</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs text-zinc-400 block mb-1.5 font-medium">AI Headline Mode</label>
+                  <select
+                    value={rewriteMode}
+                    onChange={(e): void => setRewriteMode(e.target.value as RewriteMode)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition"
+                  >
+                    <option value="Original">Original Text</option>
+                    <option value="Rewrite">Paraphrase</option>
+                    <option value="Short">Short Summary</option>
+                    <option value="Curiosity">Curiosity Hook</option>
+                    <option value="Viral">Viral/Emoji Hook</option>
+                    <option value="Question">Engaging Question</option>
+                  </select>
+                </div>
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded-lg text-sm font-bold shadow-lg shadow-indigo-600/15 transition cursor-pointer"
+                >
+                  Add to Queue
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* ── Local File mode ── */}
+          {inputMode === 'file' && (
+            <form onSubmit={handleStartFileQueue} className="space-y-4">
+              {/* Drop zone */}
+              <div
+                ref={dropZoneRef}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={handleBrowseFiles}
+                className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-8 px-4 cursor-pointer transition-all select-none ${
+                  isDragOver
+                    ? 'border-indigo-500 bg-indigo-950/20 scale-[1.01]'
+                    : 'border-zinc-700 bg-zinc-950/40 hover:border-zinc-500 hover:bg-zinc-900/60'
+                }`}
+              >
+                <div className={`text-3xl transition-transform ${isDragOver ? 'scale-125' : ''}`}>📥</div>
+                <p className="text-sm font-semibold text-zinc-300">
+                  {isDragOver ? 'Drop to add files' : 'Drag & drop video files here'}
+                </p>
+                <p className="text-xs text-zinc-500">or click to browse — MP4, MOV, AVI, MKV, WebM and more</p>
+              </div>
+
+              {/* File pills */}
+              {localFiles.length > 0 && (
+                <div className="flex flex-wrap gap-2 p-2.5 bg-zinc-950/60 border border-zinc-800/80 rounded-lg items-center">
+                  {localFiles.map((file, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 bg-emerald-950/40 text-emerald-400 border border-emerald-900/35 rounded-full text-xs font-mono select-none"
+                    >
+                      <span className="truncate max-w-[260px]" title={file.path}>{file.name}</span>
+                      <button
+                        type="button"
+                        onClick={(e): void => {
+                          e.stopPropagation();
+                          setLocalFiles(localFiles.filter((_, i) => i !== idx));
+                        }}
+                        className="w-4 h-4 rounded-full flex items-center justify-center hover:bg-emerald-900/40 text-emerald-400 hover:text-emerald-300 font-bold transition focus:outline-none cursor-pointer"
+                      >
+                        &times;
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-4 items-end">
+                <div className="flex-[2]">
+                  <label className="text-xs text-zinc-400 block mb-1.5 font-medium">Select Branded Template</label>
+                  <select
+                    value={selectedTemplateId}
+                    onChange={(e): void => setSelectedTemplateId(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition"
+                  >
+                    <option value="" disabled>Select template...</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs text-zinc-400 block mb-1.5 font-medium">AI Headline Mode</label>
+                  <select
+                    value={rewriteMode}
+                    onChange={(e): void => setRewriteMode(e.target.value as RewriteMode)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition"
+                  >
+                    <option value="Original">Original Text</option>
+                    <option value="Rewrite">Paraphrase</option>
+                    <option value="Short">Short Summary</option>
+                    <option value="Curiosity">Curiosity Hook</option>
+                    <option value="Viral">Viral/Emoji Hook</option>
+                    <option value="Question">Engaging Question</option>
+                  </select>
+                </div>
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded-lg text-sm font-bold shadow-lg shadow-indigo-600/15 transition cursor-pointer"
+                >
+                  Add to Queue
+                </button>
+              </div>
+            </form>
+          )}
         </div>
 
         {/* Job Queue List */}
@@ -250,7 +460,7 @@ export const JobsPage: React.FC = () => {
               </svg>
               <h4 className="text-sm font-semibold text-zinc-500">Queue is empty</h4>
               <p className="text-xs text-zinc-600 max-w-xs mt-1">
-                Enter Instagram URLs above and select a template to populate the render queue.
+                Enter video URLs above and select a template to populate the render queue.
               </p>
             </div>
           ) : (

@@ -65,6 +65,20 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
+  const handleClearTempDownloads = async (): Promise<void> => {
+    try {
+      const { deleted, freedBytes } = await window.api.clearTempDownloads();
+      const freed = (freedBytes / (1024 * 1024)).toFixed(1);
+      if (deleted === 0) {
+        addToast('No temp downloads to clear.', 'info');
+      } else {
+        addToast(`Cleared ${deleted} temp file${deleted !== 1 ? 's' : ''} (${freed} MB freed).`, 'success');
+      }
+    } catch (err: any) {
+      addToast(`Failed to clear temp downloads: ${err.message}`, 'error');
+    }
+  };
+
   return (
     <div className="flex-1 bg-zinc-950 p-8 overflow-y-auto h-full">
       <div className="max-w-2xl mx-auto space-y-6">
@@ -381,6 +395,27 @@ export const SettingsPage: React.FC = () => {
             </button>
           </div>
         </form>
+
+        {/* Storage management card */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 shadow-xl">
+          <h3 className="text-base font-bold text-white border-b border-zinc-800 pb-2 mb-4">Storage Management</h3>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm text-zinc-300 font-medium">Clear Temp Downloads</p>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                Deletes all cached video files downloaded by yt-dlp that are no longer needed. Safe to run at any time when no jobs are active.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleClearTempDownloads}
+              className="shrink-0 px-4 py-2 bg-red-900/30 hover:bg-red-800/40 active:bg-red-900/50 text-red-400 hover:text-red-300 border border-red-900/40 text-xs font-semibold rounded-lg transition cursor-pointer"
+            >
+              🗑 Clear Cache
+            </button>
+          </div>
+        </div>
+
       </div>
     </div>
   );

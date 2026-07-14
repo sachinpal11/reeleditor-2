@@ -32,6 +32,7 @@ export interface Job {
   id: string;
   status: JobStatus;
   sourceUrl: string;
+  localVideoPath?: string; // set when user uploads a local file (skips download)
   downloadPath?: string;
   croppedVideoPath?: string;
   headline?: string;

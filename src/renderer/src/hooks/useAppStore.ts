@@ -24,6 +24,7 @@ interface AppStoreState {
   // Job actions
   loadJobs: () => Promise<void>;
   createJobs: (urls: string[], templateId: string, rewriteMode: RewriteMode) => Promise<void>;
+  createJobsFromFiles: (filePaths: string[], templateId: string, rewriteMode: RewriteMode) => Promise<void>;
   setJobs: (jobs: Job[]) => void;
   updateJob: (job: Job) => void;
   controlJob: (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry') => Promise<void>;
@@ -130,6 +131,22 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       }
     } catch (err) {
       console.error('Store: Failed to create jobs', err);
+      throw err;
+    }
+  },
+
+  createJobsFromFiles: async (filePaths, templateId, rewriteMode) => {
+    try {
+      // @ts-ignore
+      if (window.api.createJobsFromFiles) {
+        // @ts-ignore
+        await window.api.createJobsFromFiles(filePaths, templateId, rewriteMode);
+      } else {
+        throw new Error('createJobsFromFiles is not available. Please restart the app.');
+      }
+    } catch (err) {
+      console.error('Store: Failed to create jobs from files', err);
+      throw err;
     }
   },
 

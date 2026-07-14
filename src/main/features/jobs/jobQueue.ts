@@ -44,6 +44,31 @@ export class JobQueue {
     this.processQueue();
   }
 
+  public createJobsFromLocalFiles(filePaths: string[], templateId: string, rewriteMode: RewriteMode): void {
+    const template = getTemplateStore().getTemplate(templateId);
+    if (!template) {
+      throw new Error(`Template not found: ${templateId}`);
+    }
+
+    const newJobs: Job[] = filePaths.map((filePath) => ({
+      id: `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      status: 'Waiting',
+      sourceUrl: `local://${path.basename(filePath)}`,
+      localVideoPath: filePath,
+      downloadPath: filePath, // pre-set so runJob skips download
+      selectedTemplateId: templateId,
+      rewriteMode: rewriteMode,
+      progress: 0,
+      logs: [`Job initialized from local file: ${path.basename(filePath)}. Template: ${template.name}`],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }));
+
+    this.jobs.push(...newJobs);
+    this.broadcastJobs();
+    this.processQueue();
+  }
+
   public controlJob(id: string, action: 'pause' | 'resume' | 'cancel' | 'retry'): void {
     const job = this.jobs.find((j) => j.id === id);
     if (!job) return;
@@ -135,23 +160,29 @@ export class JobQueue {
 
   private async runJob(job: Job): Promise<void> {
     try {
-      // 1. Download Phase
-      this.updateJobStatus(job.id, 'Downloading', 0, 'Starting video download...');
-      const downloader = getDownloader();
-      const videoPath = await downloader.download(job.sourceUrl, job.id, (prog) => {
-        // Update download progress
-        this.updateJobStatus(
-          job.id,
-          'Downloading',
-          Math.round(prog.percentage),
-          `Downloading: ${prog.percentage}% (${prog.speed}, ETA: ${prog.eta})`
-        );
-      });
-      job.downloadPath = videoPath;
-      this.updateJobStatus(job.id, 'Downloading', 100, `Download finished. Saved to: ${videoPath}`);
+      let videoPath: string;
 
-      // Check if job was cancelled during download
-      if (this.isJobCancelled(job.id)) return;
+      if (job.localVideoPath && job.downloadPath) {
+        // Local file upload — skip download phase entirely
+        videoPath = job.localVideoPath;
+        this.updateJobStatus(job.id, 'Cropping', 0, `Using local file: ${path.basename(videoPath)}`);
+      } else {
+        // 1. Download Phase
+        this.updateJobStatus(job.id, 'Downloading', 0, 'Starting video download...');
+        const downloader = getDownloader();
+        videoPath = await downloader.download(job.sourceUrl, job.id, (prog) => {
+          this.updateJobStatus(
+            job.id,
+            'Downloading',
+            Math.round(prog.percentage),
+            `Downloading: ${prog.percentage}% (${prog.speed}, ETA: ${prog.eta})`
+          );
+        });
+        job.downloadPath = videoPath;
+        this.updateJobStatus(job.id, 'Downloading', 100, `Download finished. Saved to: ${videoPath}`);
+
+        if (this.isJobCancelled(job.id)) return;
+      }
 
       // 2. Crop Phase
       this.updateJobStatus(job.id, 'Cropping', 0, 'Detecting active video area...');

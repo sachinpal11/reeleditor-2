@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow, shell } from 'electron';
+import { ipcMain, dialog, BrowserWindow, shell, app } from 'electron';
 import { getConfigStore } from './features/storage/configStore';
 import { getTemplateStore } from './features/storage/templateStore';
 import { getJobQueue } from './features/jobs/jobQueue';
@@ -45,6 +45,11 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('jobs:create', (_event, urls: string[], templateId: string, rewriteMode: RewriteMode) => {
     getJobQueue().createJobs(urls, templateId, rewriteMode);
+    return true;
+  });
+
+  ipcMain.handle('jobs:createFromFiles', (_event, filePaths: string[], templateId: string, rewriteMode: RewriteMode) => {
+    getJobQueue().createJobsFromLocalFiles(filePaths, templateId, rewriteMode);
     return true;
   });
 
@@ -133,6 +138,31 @@ export function registerIpcHandlers(): void {
       return null;
     }
     return result.filePaths[0];
+  });
+
+  // Downloads: clear temp yt-dlp download cache
+  ipcMain.handle('downloads:clearTemp', () => {
+    const downloadDir = path.join(app.getPath('userData'), 'downloads');
+    if (!fs.existsSync(downloadDir)) return { deleted: 0, freedBytes: 0 };
+    let deleted = 0;
+    let freedBytes = 0;
+    try {
+      const files = fs.readdirSync(downloadDir);
+      for (const file of files) {
+        const filePath = path.join(downloadDir, file);
+        try {
+          const stat = fs.statSync(filePath);
+          freedBytes += stat.size;
+          fs.unlinkSync(filePath);
+          deleted++;
+        } catch (e) {
+          console.warn(`Could not delete temp file: ${filePath}`, e);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to clear temp downloads:', e);
+    }
+    return { deleted, freedBytes };
   });
 }
 

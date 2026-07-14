@@ -18,6 +18,8 @@ const api = {
   listJobs: (): Promise<Job[]> => ipcRenderer.invoke('jobs:list'),
   createJobs: (urls: string[], templateId: string, rewriteMode: RewriteMode): Promise<boolean> =>
     ipcRenderer.invoke('jobs:create', urls, templateId, rewriteMode),
+  createJobsFromFiles: (filePaths: string[], templateId: string, rewriteMode: RewriteMode): Promise<boolean> =>
+    ipcRenderer.invoke('jobs:createFromFiles', filePaths, templateId, rewriteMode),
   controlJob: (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry'): Promise<boolean> =>
     ipcRenderer.invoke('jobs:control', id, action),
   clearCompletedJobs: (): Promise<Job[]> => ipcRenderer.invoke('jobs:clearCompleted'),
@@ -38,6 +40,8 @@ const api = {
     ipcRenderer.invoke('dialog:selectDirectory', defaultPath),
   selectFile: (filters?: { name: string; extensions: string[] }[]): Promise<string | null> =>
     ipcRenderer.invoke('dialog:selectFile', filters),
+  clearTempDownloads: (): Promise<{ deleted: number; freedBytes: number }> =>
+    ipcRenderer.invoke('downloads:clearTemp'),
 };
 
 if (process.contextIsolated) {

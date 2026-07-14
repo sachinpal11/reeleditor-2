@@ -23,6 +23,7 @@ export class YtDlpDownloader implements IDownloader {
     onProgress: (progress: DownloadProgress) => void
   ): Promise<string> {
     return new Promise((resolve, reject) => {
+
       const config = getConfigStore().getConfig();
       const ytdlpPath = config.ytdlpPath || 'yt-dlp';
 
@@ -44,6 +45,7 @@ export class YtDlpDownloader implements IDownloader {
       const args = [
         '-f', 'mp4/best',
         '--no-playlist',
+        '--no-update',
         '-o', outputPath,
       ];
 
