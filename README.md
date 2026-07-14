@@ -4,6 +4,10 @@ ReelEditor is a desktop application built on Electron, React, and TypeScript tha
 
 It combines batch downloading, automatic motion-aware cropping, OCR headline extraction, and LLM-powered rewrite hooks into a single offline/online workflow.
 
+## 📥 Download
+
+Pre-compiled installers for Windows (`.exe`), macOS, and Linux are available on the [Releases](https://github.com/sachinpal11/reeleditor-2/releases/latest) page.
+
 ---
 
 ## Architecture Overview
