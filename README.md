@@ -6,7 +6,7 @@ It combines batch downloading, automatic motion-aware cropping, OCR headline ext
 
 ## 📥 Download
 
-Pre-compiled installers for Windows (`.exe`), macOS, and Linux are available on the [Releases](https://github.com/sachinpal11/reeleditor-2/releases/latest) page.
+Pre-compiled installers for Windows (`.exe`) are available on the [Releases](https://github.com/sachinpal11/reeleditor-2/releases/latest) page.
 
 ---
 
