@@ -292,18 +292,19 @@ export class FfmpegRenderer implements IRenderer {
     // 2. Build FFmpeg command arguments
     const inputs: string[] = [];
     const filterGraph: string[] = [];
+    let nextInputIdx = 0;
 
     // Background input (if no path, create a default black background filter in FFmpeg)
-    let backgroundInputIdx = 0;
+    const backgroundInputIdx = nextInputIdx++;
     if (updatedTemplate.backgroundPath && fs.existsSync(updatedTemplate.backgroundPath)) {
-      inputs.push('-i', updatedTemplate.backgroundPath);
+      inputs.push('-loop', '1', '-i', updatedTemplate.backgroundPath);
     } else {
       // Create transparent dummy background
       inputs.push('-f', 'lavfi', '-i', `color=c=black:s=1080x1920:d=100`);
     }
 
     // Video input
-    const videoInputIdx = inputs.length / 2;
+    const videoInputIdx = nextInputIdx++;
     inputs.push('-i', videoPath);
 
     // Setup video scaling filter to scale and pad to fit template's placeholder aspect ratio
@@ -314,15 +315,15 @@ export class FfmpegRenderer implements IRenderer {
     );
 
     // Overlay video on background
-    filterGraph.push(`[${backgroundInputIdx}:v][scaled_vid]overlay=x=${updatedTemplate.video.x}:y=${updatedTemplate.video.y}[v1]`);
+    filterGraph.push(`[${backgroundInputIdx}:v][scaled_vid]overlay=x=${updatedTemplate.video.x}:y=${updatedTemplate.video.y}:shortest=1[v1]`);
 
     let lastVideoLabel = 'v1';
 
     // Logo input and overlay
     let logoInputIdx = -1;
     if (updatedTemplate.logoPath && fs.existsSync(updatedTemplate.logoPath) && updatedTemplate.logo) {
-      logoInputIdx = inputs.length / 2;
-      inputs.push('-i', updatedTemplate.logoPath);
+      logoInputIdx = nextInputIdx++;
+      inputs.push('-loop', '1', '-i', updatedTemplate.logoPath);
 
       const logoW = Math.floor(updatedTemplate.logo.width / 2) * 2;
       const logoH = Math.floor(updatedTemplate.logo.height / 2) * 2;
@@ -340,8 +341,8 @@ export class FfmpegRenderer implements IRenderer {
     // Watermark input and overlay
     let watermarkInputIdx = -1;
     if (updatedTemplate.watermarkPath && fs.existsSync(updatedTemplate.watermarkPath) && updatedTemplate.watermark) {
-      watermarkInputIdx = inputs.length / 2;
-      inputs.push('-i', updatedTemplate.watermarkPath);
+      watermarkInputIdx = nextInputIdx++;
+      inputs.push('-loop', '1', '-i', updatedTemplate.watermarkPath);
 
       const wmW = Math.floor(updatedTemplate.watermark.width / 2) * 2;
       const wmH = Math.floor(updatedTemplate.watermark.height / 2) * 2;
@@ -356,8 +357,8 @@ export class FfmpegRenderer implements IRenderer {
     }
 
     // Headline overlay input
-    const headlineInputIdx = inputs.length / 2;
-    inputs.push('-i', textOverlayPath);
+    const headlineInputIdx = nextInputIdx++;
+    inputs.push('-loop', '1', '-i', textOverlayPath);
 
     // Overlay headline
     filterGraph.push(
